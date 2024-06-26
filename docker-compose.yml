@@ -38,5 +38,24 @@ services:
     depends_on:
       - postgres
       - rabbitmq
+
+  lyrics-finder:
+    build: .
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      RABBITMQ_DEFAULT_HOST: rabbitmq
+    command: [ "celery", "-A", "astel", "worker", "--loglevel=info", "-Q", "lyrics" ]
+    volumes:
+      - ./astel:/src/astel
+      - ./summarizer:/src/summarizer
+      - ./utils:/src/utils
+      - ./media:/src/media
+      - ./static:/src/static
+
+    depends_on:
+      - postgres
+      - rabbitmq
 volumes:
   postgres-data:

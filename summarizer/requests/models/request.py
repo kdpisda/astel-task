@@ -7,6 +7,7 @@ User = get_user_model()
 
 
 class RequestStatus(models.TextChoices):
+    INITIALIZED = "INITIALIZED", "Initialized"
     PROCESSING = "PROCESSING", "Processing"
     FOUND = "FOUND", "Found"
     NOT_FOUND = "NOT_FOUND", "Not Found"
@@ -27,7 +28,10 @@ class Request(TimeStampMixin, models.Model):
     )
     status = models.CharField(
         choices=RequestStatus.choices,
-        default=RequestStatus.PROCESSING,
+        default=RequestStatus.INITIALIZED,
         max_length=255,
         help_text="Status of the request.",
+    )
+    errors = models.TextField(
+        null=True, blank=True, help_text="Errors encountered during processing."
     )
