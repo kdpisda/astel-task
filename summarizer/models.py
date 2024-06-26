@@ -1,3 +1,7 @@
-from django.db import models  # noqa
+from auditlog.registry import auditlog
 
-# Create your models here.
+from summarizer.lyrics.models.country import Country
+from summarizer.lyrics.models.song import Song
+
+auditlog.register(Song)
+auditlog.register(Country)
