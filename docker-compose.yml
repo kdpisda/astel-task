@@ -31,6 +31,8 @@ services:
       - "8000:8000"
     volumes:
       - ./astel:/src/astel
+      - ./summarizer:/src/summarizer
+      - ./utils:/src/utils
       - ./media:/src/media
       - ./static:/src/static
     depends_on:
