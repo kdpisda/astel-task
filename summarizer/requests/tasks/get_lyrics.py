@@ -1,5 +1,7 @@
 import logging
 
+from django.contrib.postgres.search import TrigramSimilarity
+
 from astel.celery import app
 from summarizer.lyrics.models.country import Country
 from summarizer.lyrics.models.song import Song
@@ -13,127 +15,109 @@ from utils.external.openai import ChatGPTClient
 logger = logging.getLogger("celery")
 
 
-def update_request_status(req, status):
-    req.status = status
-    req.save()
-    logger.info(f"Request ID: {req.id} status updated to {status}")
-
-
-def update_song_status(song, status):
-    song.status = status
-    song.save()
-    logger.info(f"Song ID: {song.id} status updated to {status}")
+def update_status(obj, status, status_attr="status", id_attr="id"):
+    setattr(obj, status_attr, status)
+    obj.save()
+    logger.info(
+        f"{obj.__class__.__name__} ID: {getattr(obj, id_attr)} status updated to {status}"
+    )
 
 
 def create_or_update_song(song_body):
-    song_body = song_body["track"]
     song_id = song_body["track_id"]
-    song = None
-    if Song.objects.filter(id=song_id).exists():
-        song = Song.objects.get(id=song_id)
-    if song:
-        serializer = MusixSongSerializer(song, data=song_body)
-    else:
-        serializer = MusixSongSerializer(data=song_body)
-    serializer.is_valid(raise_exception=True)
-    return serializer.save()
+    song, created = Song.objects.update_or_create(id=song_id, defaults=song_body)
+    return song
 
 
 def bulk_create_countries(countries):
-    countries_to_create = []
-    for country in countries:
-        countries_to_create.append(Country(name=country))
-    return Country.objects.bulk_create(countries_to_create)
+    return Country.objects.bulk_create([Country(name=country) for country in countries])
 
 
 def upsert_countries(song, countries):
     existing_countries = Country.objects.filter(name__in=countries).values_list(
         "name", flat=True
     )
-    countries_to_create = list(set(countries) - set(existing_countries))
-    bulk_create_countries(countries_to_create)
-    countries_to_map = Country.objects.filter(name__in=countries)
-    song.countries.set(countries_to_map)
-    update_song_status(song, SongStatus.COMPLETED)
+    new_countries = list(set(countries) - set(existing_countries))
+    bulk_create_countries(new_countries)
+    song.countries.set(Country.objects.filter(name__in=countries))
+    update_status(song, SongStatus.COMPLETED)
 
 
-def get_summary_and_countries(req, song):
-    if not song:
-        logger.info(f"Song not found for Request ID: {req.id}")
-        return
-    if not song.summary or song.status not in [SongStatus.COMPLETED, SongStatus.FAILED]:
-        logger.info(f"Generating Summary for Request ID: {req.id}")
-        gpt = ChatGPTClient()
-        song.summary = gpt.get_song_summary(song.lyrics)
-        update_song_status(song, SongStatus.SUMMARY_GENERATED)
-        countries = gpt.get_countries(song.lyrics)
-        upsert_countries(song, countries)
-
-
-def does_song_exists(req):
-    return Song.objects.filter(
-        name__trigram_similar=req.track, artist_name__trigram_similar=req.artist
-    ).exists()
-
-
-def get_matched_song(req):
-    return Song.objects.filter(
-        name__trigram_similar=req.track, artist_name__trigram_similar=req.artist
-    ).first()
+def generate_summary_and_countries(song):
+    gpt = ChatGPTClient()
+    song.summary = gpt.get_song_summary(song.lyrics)
+    update_status(song, SongStatus.SUMMARY_GENERATED)
+    countries = gpt.get_countries(song.lyrics)
+    upsert_countries(song, countries)
 
 
 def get_track_and_lyrics(req):
     musix = MusixMatchClient()
     fetched_song = None
-    if does_song_exists(req):
-        fetched_song = get_matched_song(req)
-        song = MusixSongSerializer(fetched_song).data
-    else:
-        song = musix.get_track(req.artist, req.track)
-    if song:
-        logger.info(f"Song Found: {song}")
-        if not fetched_song:
-            fetched_song = create_or_update_song(song)
-        if fetched_song.status != SongStatus.COMPLETED:
+    queryset = (
+        Song.objects.annotate(
+            name_similarity=TrigramSimilarity("name", req.track),
+            artist_similarity=TrigramSimilarity("artist_name", req.artist),
+        )
+        .filter(
+            name_similarity__gt=0.6,  # Adjust threshold as needed
+            artist_similarity__gt=0.6,  # Adjust threshold as needed
+        )
+        .order_by("-name_similarity", "-artist_similarity")
+    )
+    if queryset.exists():
+        fetched_song = queryset.first()
+    song_data = (
+        MusixSongSerializer(fetched_song).data
+        if fetched_song
+        else musix.get_track(req.artist, req.track)["track"]
+    )
+
+    if song_data:
+        song = create_or_update_song(song_data)
+        req.song = song
+        update_status(req, RequestStatus.SONG_FOUND, status_attr="status", id_attr="id")
+        if not song.lyrics:
             lyrics = musix.get_lyrics(req.artist, req.track)
-            logger.info(f"Lyrics Found for request: {req.id}")
             if lyrics:
-                fetched_song.lyrics = lyrics.get("lyrics", {}).get("lyrics_body", "")
-                update_song_status(fetched_song, SongStatus.LYRICS_FETCHED)
-                req.song = fetched_song
-                update_request_status(req, RequestStatus.COMPLETED)
-                get_summary_and_countries(req, fetched_song)
+                song.lyrics = lyrics.get("lyrics", {}).get("lyrics_body", "")
+                update_status(song, SongStatus.LYRICS_FETCHED)
+                update_status(
+                    req, RequestStatus.LYRICS_FOUND, status_attr="status", id_attr="id"
+                )
+                generate_summary_and_countries(song)
             else:
-                update_request_status(req, RequestStatus.NOT_FOUND)
+                update_status(
+                    req, RequestStatus.NOT_FOUND, status_attr="status", id_attr="id"
+                )
     else:
-        update_request_status(req, RequestStatus.NOT_FOUND)
-    return fetched_song
+        update_status(req, RequestStatus.NOT_FOUND, status_attr="status", id_attr="id")
 
 
 @app.task(queue="lyrics")
 def get_lyrics(request_id):
     logger.info(f"Finding Lyrics for Request ID: {request_id}")
     try:
-        if Request.objects.filter(
-            id=request_id,
-            status__in=[
-                RequestStatus.INITIALIZED,
-                RequestStatus.COMPLETED,
-                RequestStatus.NOT_FOUND,
-                RequestStatus.FAILED,
-            ],
-        ).exists():
-            req = Request.objects.get(id=request_id)
+        req = (
+            Request.objects.filter(id=request_id)
+            .exclude(status=RequestStatus.PROCESSING)
+            .first()
+        )
+        if req:
             req.errors = None
-            update_request_status(req, RequestStatus.PROCESSING)
+            update_status(
+                req, RequestStatus.PROCESSING, status_attr="status", id_attr="id"
+            )
             get_track_and_lyrics(req)
+            update_status(
+                req, RequestStatus.COMPLETED, status_attr="status", id_attr="id"
+            )
         else:
             logger.info(
                 f"Request ID: {request_id} not found or already processing/processed."
             )
     except Exception as err:
-        logger.error(f"Error while processing Request ID: {request_id}")
-        logger.error(err)
+        logger.error(f"Error while processing Request ID: {request_id}: {err}")
         if req:
             req.error = str(err)
-            update_request_status(req, RequestStatus.FAILED)
+            update_status(req, RequestStatus.FAILED, status_attr="status", id_attr="id")
