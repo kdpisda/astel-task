@@ -18,6 +18,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    command: ["postgres", "-c", "shared_preload_libraries=pg_trgm"]
 
   astel:
     build: .
@@ -53,7 +54,6 @@ services:
       - ./utils:/src/utils
       - ./media:/src/media
       - ./static:/src/static
-
     depends_on:
       - postgres
       - rabbitmq

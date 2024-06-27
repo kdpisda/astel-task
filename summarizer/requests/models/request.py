@@ -9,7 +9,10 @@ User = get_user_model()
 class RequestStatus(models.TextChoices):
     INITIALIZED = "INITIALIZED", "Initialized"
     PROCESSING = "PROCESSING", "Processing"
-    FOUND = "FOUND", "Found"
+    SONG_FOUND = "SONG_FOUND", "Song Found"
+    LYRICS_FOUND = "LYRICS_FOUND", "Lyrics Found"
+    SUMMARY_GENERATED = "SUMMARY_GENERATED", "Summary Generated"
+    COMPLETED = "COMPLETED", "Completed"
     NOT_FOUND = "NOT_FOUND", "Not Found"
     FAILED = "FAILED", "Failed"
 
@@ -35,3 +38,6 @@ class Request(TimeStampMixin, models.Model):
     errors = models.TextField(
         null=True, blank=True, help_text="Errors encountered during processing."
     )
+
+    def __str__(self):
+        return f"{self.track} by {self.artist}"
