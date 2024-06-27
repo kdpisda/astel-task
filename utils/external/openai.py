@@ -4,7 +4,7 @@ import logging
 from django.conf import settings
 from openai import OpenAI
 
-from summarizer.logging.models.openai import GPTLog
+from summarizer.logging.models.gpt import GPTLog
 
 
 class ChatGPTClient:

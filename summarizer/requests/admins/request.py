@@ -20,3 +20,6 @@ class RequestAdmin(admin.ModelAdmin):
 
     fetch_lyrics.short_description = "Fetch Lyrics for selected requests"
     actions = [fetch_lyrics]
+
+    def has_change_permission(self, request, obj=None):
+        return False
