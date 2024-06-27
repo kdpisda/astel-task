@@ -70,26 +70,44 @@ def get_summary_and_countries(req, song):
         upsert_countries(song, countries)
 
 
+def does_song_exists(req):
+    return Song.objects.filter(
+        name__trigram_similar=req.track, artist_name__trigram_similar=req.artist
+    ).exists()
+
+
+def get_matched_song(req):
+    return Song.objects.filter(
+        name__trigram_similar=req.track, artist_name__trigram_similar=req.artist
+    ).first()
+
+
 def get_track_and_lyrics(req):
     musix = MusixMatchClient()
-    song = musix.get_track(req.artist, req.track)
-    created_song = None
+    fetched_song = None
+    if does_song_exists(req):
+        fetched_song = get_matched_song(req)
+        song = MusixSongSerializer(fetched_song).data
+    else:
+        song = musix.get_track(req.artist, req.track)
     if song:
         logger.info(f"Song Found: {song}")
-        created_song = create_or_update_song(song)
-        lyrics = musix.get_lyrics(req.artist, req.track)
-        logger.info(f"Lyrics Found for request: {req.id}")
-        if lyrics:
-            created_song.lyrics = lyrics.get("lyrics", {}).get("lyrics_body", "")
-            update_song_status(created_song, SongStatus.LYRICS_FETCHED)
-            req.song = created_song
-            update_request_status(req, RequestStatus.COMPLETED)
-            get_summary_and_countries(req, created_song)
-        else:
-            update_request_status(req, RequestStatus.NOT_FOUND)
+        if not fetched_song:
+            fetched_song = create_or_update_song(song)
+        if fetched_song.status != SongStatus.COMPLETED:
+            lyrics = musix.get_lyrics(req.artist, req.track)
+            logger.info(f"Lyrics Found for request: {req.id}")
+            if lyrics:
+                fetched_song.lyrics = lyrics.get("lyrics", {}).get("lyrics_body", "")
+                update_song_status(fetched_song, SongStatus.LYRICS_FETCHED)
+                req.song = fetched_song
+                update_request_status(req, RequestStatus.COMPLETED)
+                get_summary_and_countries(req, fetched_song)
+            else:
+                update_request_status(req, RequestStatus.NOT_FOUND)
     else:
         update_request_status(req, RequestStatus.NOT_FOUND)
-    return created_song
+    return fetched_song
 
 
 @app.task(queue="lyrics")
