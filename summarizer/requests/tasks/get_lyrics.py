@@ -24,7 +24,10 @@ def update_status(obj, status, status_attr="status", id_attr="id"):
 
 
 def create_or_update_song(song_body):
-    song_id = song_body["track_id"]
+    serializer = MusixSongSerializer(data=song_body)
+    serializer.is_valid(raise_exception=True)
+    song_body = serializer.validated_data
+    song_id = song_body["id"]
     song, created = Song.objects.update_or_create(id=song_id, defaults=song_body)
     return song
 
