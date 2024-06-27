@@ -3,12 +3,26 @@ import os
 
 import requests
 
+from summarizer.logging.models.musix import MusixLog
+
 
 class MusixMatchClient:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         self.api_key = os.getenv("MUSIXMATCH_API_KEY")
         self.base_url = "https://api.musixmatch.com/ws/1.1/"
+
+    def log_request(self, endpoint, params, response, status_code):
+        try:
+            MusixLog.objects.create(
+                endpoint=endpoint,
+                params=params,
+                response=response,
+                status_code=status_code,
+            )
+            self.logger.info("Logged MusixMatch request")
+        except Exception as err:
+            self.logger.error(f"Error logging MusixMatch request: {err}")
 
     def get(self, url, params):
         url = f"{self.base_url}{url}"
@@ -17,6 +31,7 @@ class MusixMatchClient:
         self.logger.info(
             f"Request to {response.url} returned status code {response.status_code}"
         )
+        self.log_request(url, params, response.json(), response.status_code)
         if response.status_code == 200:
             resp_json = response.json()
             return resp_json.get("message", {}).get("body", {})

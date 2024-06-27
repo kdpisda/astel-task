@@ -9,3 +9,6 @@ class Country(TimeStampMixin, models.Model):
     class Meta:
         verbose_name_plural = "Countries"
         verbose_name = "Country"
+
+    def __str__(self):
+        return self.name
